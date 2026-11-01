@@ -1,0 +1,18 @@
+{
+  "name": "passerelle",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Extraire et importer ses boutiques Etsy, depuis son PC",
+  "license": "MIT",
+  "workspaces": ["shared", "server", "web"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "npm run dev --workspace server",
+    "dev:web": "npm run dev --workspace web",
+    "build": "npm run build --workspace shared && npm run build --workspace server && npm run build --workspace web",
+    "start": "node server/dist/index.js",
+    "test": "npm run test --workspace server",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "overrides": { "glob": "^14.0.3", "minimatch": "^11.0.3", "esbuild": "^0.28.2" }
+}
