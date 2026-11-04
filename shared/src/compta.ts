@@ -16,6 +16,7 @@ export interface Order {
   totalPrice: number; subtotal: number; shipping: number; tax: number; discount: number; giftWrap: number; grandtotal: number;
   refunds: OrderRefund[]; items: OrderItem[];
   /** Destinataire et état d'expédition (absents des commandes récupérées avant le 2026-09-23 : relancer une récupération). */
+  email?: string; phone?: string; message?: string;
   name?: string; address?: string; city?: string; state?: string; zip?: string; shipped?: boolean;
   /** Lignes de l’adresse de livraison. */
   line1?: string; line2?: string;

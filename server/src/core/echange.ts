@@ -9,6 +9,7 @@ import { badRequest } from './errors.js';
 export interface ExchangeArchive {
   json: unknown;
   releve?: unknown;
+  catalogue?: unknown;
   /** Médias lus et vérifiés par leur contenu, par chemin dans l'archive. */
   files: Map<string, Buffer>;
 }
@@ -61,6 +62,7 @@ export function readExchangeArchive(data: Buffer, options: { media?: boolean; re
       if (err) return reject(badRequest("Ce fichier n'est pas une archive d'échange lisible."));
       let json: unknown;
       let releve: unknown;
+      let catalogue: unknown;
       const names = new Set<string>();
       let entries = 0;
       // somme des tailles annoncées (et vérifiées à la lecture) : une petite archive peut cacher des Go de zéros compressés
@@ -71,14 +73,14 @@ export function readExchangeArchive(data: Buffer, options: { media?: boolean; re
       zip.on('error', () => fail("Ce fichier n'est pas une archive d'échange lisible."));
       zip.on('end', () => {
         if (json === undefined) return reject(badRequest('Archive sans echange.json.'));
-        resolve({ json, releve, files });
+        resolve({ json, releve, catalogue, files });
       });
       zip.on('entry', (entry: yauzl.Entry) => {
         if (++entries > ECHANGE_LIMITS.entries) return fail("Trop de fichiers dans l'archive.");
         const name = entry.fileName;
         // les dossiers de l'archive n'apportent rien ; tout autre nom que ceux prévus est refusé (chemins, fichiers cachés…)
         if (name === 'images/' || name === 'videos/') return zip.readEntry();
-        if (name !== 'echange.json' && !(options.releve && name === 'releve.json') && (!media || !NAME.test(name))) return fail(`Fichier inattendu dans l'archive : ${name.slice(0, 80)}`);
+        if (name !== 'echange.json' && !(options.releve && (name === 'releve.json' || name === 'catalogue.json')) && (!media || !NAME.test(name))) return fail(`Fichier inattendu dans l'archive : ${name.slice(0, 80)}`);
         if (entry.uncompressedSize > limitOf(name)) return fail(`Fichier trop lourd : ${name}`);
         declaredTotal += entry.uncompressedSize;
         if (declaredTotal > ECHANGE_LIMITS.archive) return fail('Archive trop lourde une fois ouverte.');
@@ -87,10 +89,10 @@ export function readExchangeArchive(data: Buffer, options: { media?: boolean; re
         names.add(name);
         if (files.has(name)) return fail(`Fichier présent deux fois : ${name}`);
         readEntry(zip, entry, limitOf(name)).then(content => {
-          if (name === 'echange.json' || name === 'releve.json') {
+          if (name === 'echange.json' || name === 'releve.json' || name === 'catalogue.json') {
             try {
               const value: unknown = JSON.parse(content.toString('utf8'));
-              if (name === 'releve.json') releve = value; else json = value;
+              if (name === 'releve.json') releve = value; else if(name === 'catalogue.json') catalogue=value; else json = value;
             } catch {
               return fail('echange.json illisible.');
             }

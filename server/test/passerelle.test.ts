@@ -39,7 +39,7 @@ afterAll(async()=>{if(!db.db.closed)await db.db.close();});
 describe('Extraction et confidentialité',()=>{
  it('récupère les quatre étapes et produit les deux fichiers compatibles',async()=>{
   await extraction.sync(await db.shops());const files=await unzip(await extraction.export([id],'30j'));
-  expect(Object.keys(files).sort()).toEqual(['echange.json','releve.json']);expect(boutiqueFileSchema.safeParse(files['echange.json']).success).toBe(true);expect(releveFileSchema.safeParse(files['releve.json']).success).toBe(true);
+  expect(Object.keys(files).sort()).toEqual(['catalogue.json','echange.json','releve.json']);expect(boutiqueFileSchema.safeParse(files['echange.json']).success).toBe(true);expect(releveFileSchema.safeParse(files['releve.json']).success).toBe(true);
   expect(files['echange.json'].commandes).toHaveLength(1);expect(files['echange.json'].commandes[0].shipTo.name).toBe('CLIENT PRIVE');
   const r=files['releve.json'];expect(r.boutiques[0].commandes).toHaveLength(3);expect(r.boutiques[0].operations).toHaveLength(1);expect(r.boutiques[0].vues[0].day).toBe('2026-11-01');expect(r.boutiques[0].annonces[0].image).toBeNull();
   const text=JSON.stringify(r);for(const token of ['CLIENT PRIVE','RUE PRIVEE','VILLE PRIVEE','75001','shipments','trackingCode','name','address','line1','line2','city','zip'])expect(text).not.toContain(token);
@@ -76,7 +76,7 @@ describe('Imports confirmés',()=>{
   expect(calls.filter(c=>c.url.endsWith('/shops/1/listings')&&c.method==='POST')).toHaveLength(1);expect(calls.some(c=>c.method==='PATCH')).toBe(true);expect(calls.every(c=>!c.body.includes('state=active'))).toBe(true);
  });
  it('ne modifie jamais une annonce publiée et ignore les fichiers anciens',async()=>{
-  listingState='active';let p=await imports.preview(await writeExchangeArchive(envelope('fiches',[fiche])));expect(p.accepted).toBe(0);listingState='draft';
+  listingState='active';let p=await imports.preview(await writeExchangeArchive(envelope('fiches',[fiche])));expect(p.accepted).toBe(1);const before=calls.filter(c=>c.method==='PATCH').length;await imports.confirm(p.token);expect(calls.filter(c=>c.method==='PATCH')).toHaveLength(before);listingState='draft';
   p=await imports.preview(await writeExchangeArchive(envelope('fiches',[fiche],now-1)));expect(p.entries[0]?.action).toContain('plus ancien');const n=calls.filter(c=>c.method==='PATCH').length;await imports.confirm(p.token);expect(calls.filter(c=>c.method==='PATCH')).toHaveLength(n);
  });
  it('bloque une création incertaine au lieu de la dupliquer',async()=>{

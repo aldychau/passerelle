@@ -48,8 +48,14 @@ it('importe les vrais exports Studio par HTTP sans publication ni doublon',async
    expect(calls.slice(before).every(c=>c.method==='GET')).toBe(true);
    const confirm=await app.inject({method:'POST',url:'/api/import/confirm',headers:write,payload:{token:preview.json().token}});
    expect(confirm.statusCode,confirm.body).toBe(200);
-   expect(confirm.json().log).toHaveLength(accepted);
-   for(const line of confirm.json().log)expect(line).toContain('terminé');
+   expect(calls.slice(before).every(c=>c.method==='GET')).toBe(true);
+   expect(confirm.json().pending).toBe(accepted);
+   const start=await app.inject({method:'POST',url:'/api/import/sync',headers:write,payload:{}});
+   expect(start.statusCode).toBe(200);
+   let state:any;for(let n=0;n<200;n++){state=(await app.inject({url:'/api/import/state',headers})).json();if(!state.running)break;await new Promise(resolve=>setTimeout(resolve,5));}
+   expect(state.pending).toBe(0);
+   expect(state.log).toHaveLength(accepted);
+   for(const line of state.log)expect(line).toContain('terminé');
    const reused=await app.inject({method:'POST',url:'/api/import/confirm',headers:write,payload:{token:preview.json().token}});
    expect(reused.statusCode).toBe(400);
    expect(listings.get(55)?.state).toBe('draft');

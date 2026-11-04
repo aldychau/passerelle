@@ -16,14 +16,14 @@ export class Imports {
  log:string[]=[];
  constructor(readonly store:Store,readonly etsy:EtsyClient,readonly now=Date.now){}
  async shop(name:string){const s=(await this.store.shops()).filter(s=>key(s.name)===key(name));if(s.length!==1||!s[0]?.etsy_id)throw badRequest('Boutique inconnue ou non connectée : '+name);if(!(await this.store.credentials(s[0].id).load()).tokens)throw badRequest('Boutique déconnectée');return s[0];}
- async existing(i:FicheItem,s:Shop){
+ async existing(i:FicheItem,s:Shop,remote=true){
   const r=(await this.store.db.query<{shop:string;listing_id:number|null;status:string;created_at:number}>('SELECT * FROM imported_fiches WHERE ref=$1',[i.ref])).rows[0];
   if(r){if(r.shop!==s.id)throw badRequest('Référence affectée à une autre boutique');if(!r.listing_id)throw badRequest('Création incertaine : vérifiez Etsy avant de reprendre cette référence.');
-   const l=await this.etsy.get<Raw>(this.store.credentials(s.id),`/listings/${r.listing_id}`);
-   if(Number(l.shop_id)!==Number(s.etsy_id)||l.state!=='draft')throw badRequest('Cette annonce n’est plus un brouillon de cette boutique.');
+   const l=remote?await this.etsy.get<Raw>(this.store.credentials(s.id),`/listings/${r.listing_id}`):(await this.store.rows<Raw>(s.id,'listing')).find(l=>l.id===Number(r.listing_id));
+   if(l&&((remote&&Number(l.shop_id)!==Number(s.etsy_id))||l.state!=='draft'))throw badRequest('Cette annonce n’est plus un brouillon de cette boutique.');
   }return r;
  }
- async check(i:FicheItem,s:Shop,files:Map<string,Buffer>){
+ async check(i:FicheItem,s:Shop,files:Map<string,Buffer>,remote=true){
   if(i.price.currency!==s.currency)throw badRequest('Devise différente de la boutique');
   if(!i.whoMade||!i.whenMade||!i.taxonomyId)throw badRequest('Renseignez fabricant, période de fabrication et catégorie dans le Studio.');
   if(i.whoMade==='someone_else'&&!i.productionPartner)throw badRequest('Partenaire de production manquant.');
@@ -37,7 +37,7 @@ export class Imports {
   const d=(await this.store.rows<Raw>(s.id,'settings'))[0];
   if(!d?.shippingProfileId||!d?.readinessStateId)throw badRequest('Choisissez les profils d’expédition et de préparation dans Boutiques.');
   let partner:number|null=null;
-  if(i.productionPartner){const rows=await this.etsy.get<Raw>(this.store.credentials(s.id),`/shops/${s.etsy_id}/production-partners`);partner=rows.results?.find((p:Raw)=>key(p.partner_name)===key(i.productionPartner!))?.production_partner_id??null;if(!partner)throw badRequest('Partenaire de production non déclaré sur Etsy.');}
+  if(remote&&i.productionPartner){const rows=await this.etsy.get<Raw>(this.store.credentials(s.id),`/shops/${s.etsy_id}/production-partners`);partner=rows.results?.find((p:Raw)=>key(p.partner_name)===key(i.productionPartner!))?.production_partner_id??null;if(!partner)throw badRequest('Partenaire de production non déclaré sur Etsy.');}
   return {d,partner};
  }
  async checkSuivi(i:SuiviItem,s:Shop){
@@ -57,14 +57,38 @@ export class Imports {
   for(const i of f.items){const label='ref'in i?i.ref:`${i.shop} · ${i.receiptId}`;
    if(seen.has(label))throw badRequest('Élément en double');seen.add(label);
    try{const s=await this.shop(i.shop);let action:string;
-    if('ref'in i){await this.check(i,s,archive.files);const old=await this.existing(i,s);action=old&&Number(old.created_at)>f.createdAt?'Ignorer : fichier plus ancien':old?'Mettre à jour le brouillon':'Créer un brouillon';}
-    else{const c=await this.checkSuivi(i,s);action=c.old&&Number(c.old.created_at)>f.createdAt?'Ignorer : fichier plus ancien':c.send?'Envoyer le suivi à Etsy et prévenir l’acheteur':'Enregistrer l’état, sans envoi Etsy';}
+    if('ref'in i){await this.check(i,s,archive.files,false);const old=await this.existing(i,s,false);action=old&&Number(old.created_at)>f.createdAt?'Ignorer : fichier plus ancien':old?'Mettre à jour le brouillon':'Créer un brouillon';}
+    else{const old=(await this.store.db.query<{created_at:number;sent:boolean;send_status:string}>('SELECT created_at,sent,send_status FROM suivis WHERE shop=$1 AND receipt_id=$2',[s.id,i.receiptId])).rows[0],r=(await this.store.rows<Order>(s.id,'order')).find(o=>o.id===i.receiptId);const c={old,send:i.etat==='envoye'&&!!i.trackingCode&&!r?.shipped&&!old?.sent&&old?.send_status!=='uncertain'};action=c.old&&Number(c.old.created_at)>f.createdAt?'Ignorer : fichier plus ancien':c.send?'Envoyer le suivi à Etsy et prévenir l’acheteur':'Enregistrer l’état, sans envoi Etsy';}
+    if(!('ref'in i))action+=' · Suivi : '+(i.trackingCode??'aucun');
     entries.push({label,action});accepted.push(i);
    }catch(e){entries.push({label,action:e instanceof Error&&'statusCode'in e?e.message:'Vérification Etsy impossible. Reconnectez la boutique si nécessaire.'});}
   }
   const token=crypto.randomUUID();this.pending={token,expires:this.now()+30*60000,archive,items:accepted,createdAt:f.createdAt};
   this.timer=setTimeout(()=>this.dispose(),30*60000);this.timer.unref();
   return {token,type:f.type,entries,accepted:accepted.length};
+ }
+ async enqueue(token:string){
+  const p=this.pending;if(this.running||!p||p.token!==token||p.expires<this.now())throw badRequest('Aperçu expiré : recharge le fichier.');
+  const shops=new Map<string,Shop>();for(const i of p.items)shops.set(i.shop,await this.shop(i.shop));
+  await this.store.db.transaction(async tx=>{for(const i of p.items){
+   const s=shops.get(i.shop)!,id=crypto.randomUUID(),label='ref'in i?i.ref:`${i.shop} · ${i.receiptId}`;
+   const files='ref'in i?i.images.map(m=>[m.file,p.archive.files.get(m.file)!.toString('base64')]):[];
+   const payload=this.store.secrets.seal(JSON.stringify({item:i,createdAt:p.createdAt,files}),id);
+   await tx.query('INSERT INTO import_jobs(id,shop,label,payload) VALUES($1,$2,$3,$4)',[id,s.id,label,payload]);
+  }});
+  this.dispose();return this.state();
+ }
+ async state(){const rows=(await this.store.db.query<{id:string;label:string;status:string;result:string}>('SELECT id,label,status,result FROM import_jobs ORDER BY position')).rows;return {running:this.running,pending:rows.filter(r=>r.status!=='done').length,total:rows.length,completed:rows.filter(r=>r.status==='done').length,entries:rows,log:this.log};}
+ async synchronize(){
+  if(this.running)throw badRequest('Synchronisation en cours');this.running=true;this.log=[];
+  try{for(const job of (await this.store.db.query<{id:string;payload:string;label:string}>("SELECT id,payload,label FROM import_jobs WHERE status<>'done' ORDER BY position")).rows){
+   await this.store.db.query("UPDATE import_jobs SET status='running' WHERE id=$1",[job.id]);
+   try{const p=JSON.parse(this.store.secrets.open(job.payload,job.id)),i=p.item as FicheItem|SuiviItem,s=await this.shop(i.shop);
+    if('ref'in i)await this.save(i,s,{createdAt:p.createdAt,archive:{json:null,files:new Map(p.files.map(([name,data]:[string,string])=>[name,Buffer.from(data,'base64')]))}} as Pending);else {const old=(await this.store.db.query<{send_status:string}>('SELECT send_status FROM suivis WHERE shop=$1 AND receipt_id=$2',[s.id,i.receiptId])).rows[0];if(i.etat==='envoye'&&old?.send_status==='uncertain')throw badRequest('Envoi incertain');await this.suivi(i,s,p.createdAt);}
+    await this.store.db.query("UPDATE import_jobs SET status='done',payload='',result='Terminé' WHERE id=$1",[job.id]);this.log.push(job.label+' : terminé.');
+   }catch{await this.store.db.query("UPDATE import_jobs SET status='failed',result='Échec : vérifie Etsy avant de reprendre. Un envoi incertain reste bloqué.' WHERE id=$1",[job.id]);this.log.push(job.label+' : Échec. Vérifie Etsy avant de reprendre.');}
+  }}finally{this.running=false;}
+  return this.state();
  }
  async confirm(token:string){
   const p=this.pending;if(this.running||!p||p.token!==token||p.expires<this.now())throw badRequest('Aperçu expiré : rechargez le fichier.');

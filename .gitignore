@@ -2,7 +2,6 @@ node_modules/
 dist/
 .env
 .env.*
-!.env.example
 .passerelle/
 Passerelle/
 data/
@@ -12,3 +11,11 @@ data/
 *.log
 coverage/
 .DS_Store
+secret.key
+db/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*

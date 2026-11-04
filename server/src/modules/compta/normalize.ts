@@ -14,7 +14,7 @@ const money = (m: Raw | null | undefined): number => (m && m.divisor ? m.amount 
  * commande ; pour celles-là, elles ne sont jamais écrites en base.
  */
 export function keepsBuyerContact(r: Raw): boolean {
-  return !r.is_shipped && !['canceled', 'cancelled', 'fully refunded', 'refunded'].includes(String(r.status || '').toLowerCase());
+  return !!r.is_paid && !r.is_shipped && !(r.refunds || []).length && !['completed', 'canceled', 'cancelled', 'fully refunded', 'refunded'].includes(String(r.status || '').toLowerCase());
 }
 
 
@@ -45,6 +45,7 @@ export function normalizeReceipt(r: Raw): Order {
     zip: contact ? String(r.zip || '') : '',
     line1: contact ? String(r.first_line || '') : '',
     line2: contact ? String(r.second_line || '') : '',
+    ...(contact ? {email:String(r.buyer_email || ''),phone:String(r.phone || ''),message:String(r.message_from_buyer || '')} : {}),
     shipped: !!r.is_shipped,
     shipments: (r.shipments || []).map((s: Raw) => ({
       carrier: String(s.carrier_name || ''),
@@ -55,11 +56,11 @@ export function normalizeReceipt(r: Raw): Order {
       id: x.transaction_id,
       listingId: x.listing_id ?? null,
       sku: typeof x.sku === 'string' ? x.sku : null,
-      title: x.title || '',
+      title: contact ? x.title || '' : '',
       qty: x.quantity || 1,
       price: money(x.price),
-      variations: (x.variations || []).map((v: Raw) => v.formatted_value).filter(Boolean).join(', '),
-      options: (x.variations || []).map((v: Raw) => ({ name: String(v.formatted_name || ''), value: String(v.formatted_value || '') })).filter((o: { value: string }) => o.value),
+      variations: (contact ? x.variations || [] : []).map((v: Raw) => v.formatted_value).filter(Boolean).join(', '),
+      options: (contact ? x.variations || [] : []).map((v: Raw) => ({ name: String(v.formatted_name || ''), value: String(v.formatted_value || '') })).filter((o: { value: string }) => o.value),
     })),
   };
 }
@@ -86,7 +87,7 @@ export function normalizeLedger(e: Raw): LedgerEntry {
     amount: (Number(e.amount) || 0) / 100, // le relevé est en centimes
     currency: e.currency ?? null,
     type: e.ledger_type || '',
-    desc: e.description || '',
+    desc: '', // Le texte libre peut identifier un acheteur.
     refType: e.reference_type || '',
     refId: e.reference_id != null ? String(e.reference_id) : '',
   };

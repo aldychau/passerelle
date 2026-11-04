@@ -9,3 +9,5 @@ export function periodeStart(p: import('./echange.js').EchangePeriode, now: numb
   const end = new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0)).getUTCDate();
   d.setUTCDate(Math.min(day,end)); return d.getTime();
 }
+
+export * from './catalogue.js';
