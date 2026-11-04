@@ -1,3 +1,4 @@
+import { localTls } from './tls.js';
 import Fastify from 'fastify';
 import helmet from '@fastify/helmet';
 import serveStatic from '@fastify/static';
@@ -13,11 +14,11 @@ import { Imports } from './imports.js';
 import { badRequest } from './core/errors.js';
 import { readExchangeArchive,writeExchangeArchive } from './core/echange.js';
 export const HOST='127.0.0.1',PORT=3030;
-export const CALLBACK='http://127.0.0.1:3030/oauth/etsy/callback';
+export const CALLBACK='https://localhost:3030/oauth/etsy/callback';
 const allowedHosts=new Set(['127.0.0.1:3030','localhost:3030']);
 const scopes=['shops_r','transactions_r','listings_r','listings_w','transactions_w','billing_r','profile_r'];
 export async function createApp(store:Store,etsy=new EtsyClient()){
- const app=Fastify({logger:false,bodyLimit:200*1024*1024,requestTimeout:300000});
+ const app=Fastify({https:localTls(store.location),logger:false,bodyLimit:200*1024*1024,requestTimeout:300000});
  const csrf=crypto.randomBytes(32).toString('base64url');
  const extraction=new Extraction(store,etsy),imports=new Imports(store,etsy);
  const oauth=new Map<string,{id:string;verifier:string;expires:number;browser:string}>();
@@ -27,10 +28,11 @@ export async function createApp(store:Store,etsy=new EtsyClient()){
   reply.header('Cache-Control','no-store');
   if(!allowedHosts.has(req.headers.host??''))return reply.code(403).send({error:'Hôte refusé'});
   const origin=req.headers.origin;
-  if(origin&&origin!==`http://${req.headers.host}`)return reply.code(403).send({error:'Origine refusée'});
+  if(origin&&origin!==`https://${req.headers.host}`)return reply.code(403).send({error:'Origine refusée'});
   if(req.headers['sec-fetch-site']==='cross-site'&&!req.url.startsWith('/oauth/etsy/callback'))return reply.code(403).send({error:'Origine refusée'});
+  if(req.headers.host==='127.0.0.1:3030'&&['GET','HEAD'].includes(req.method)&&!/^\/api(?:\/|\?|$)/.test(req.url))return reply.redirect('https://localhost:3030'+req.url,302);
   if(!['GET','HEAD','OPTIONS'].includes(req.method)){
-   if(origin!==`http://${req.headers.host}`||req.headers['x-csrf-token']!==csrf)return reply.code(403).send({error:'Protection CSRF : rechargez la page.'});
+   if(origin!==`https://${req.headers.host}`||req.headers['x-csrf-token']!==csrf)return reply.code(403).send({error:'Protection CSRF : rechargez la page.'});
   }
  });
  app.setErrorHandler((e,_req,reply)=>{const status=(e as {statusCode?:number}).statusCode??400;reply.code(status>=400&&status<500?status:400).send({error:e instanceof z.ZodError?'Données invalides.':status===400?(e instanceof Error&&'statusCode'in e?e.message:'Opération impossible. Vérifiez les données et la connexion Etsy.'):'Opération refusée.'});});
@@ -50,7 +52,7 @@ export async function createApp(store:Store,etsy=new EtsyClient()){
   const {id}=req.params as {id:string},c=await store.credentials(id).load(),pkce=EtsyClient.createPkce(),browser=crypto.randomBytes(32).toString('hex');
   for(const [state,p]of oauth)if(p.id===id)oauth.delete(state);
   oauth.set(pkce.state,{id,verifier:pkce.verifier,expires:Date.now()+600000,browser});
-  reply.header('Set-Cookie',`passerelle_oauth=${browser}; HttpOnly; SameSite=Lax; Path=/oauth/etsy; Max-Age=600`);
+  reply.header('Set-Cookie',`passerelle_oauth=${browser}; Secure; HttpOnly; SameSite=Lax; Path=/oauth/etsy; Max-Age=600`);
   return {url:'/oauth/etsy/start?state='+pkce.state};
  });
  app.get('/oauth/etsy/start',async(req,reply)=>{
@@ -68,7 +70,7 @@ export async function createApp(store:Store,etsy=new EtsyClient()){
    const info=await etsy.get<{currency_code:string;created_timestamp:number}>(store.credentials(p.id),`/shops/${me.shop_id}`);
    await store.db.query('UPDATE shops SET etsy_id=$1,currency=$2,created=$3 WHERE id=$4',[me.shop_id,info.currency_code,info.created_timestamp,p.id]);
   }catch{await store.credentials(p.id).saveTokens(null);throw badRequest('Impossible d’identifier la boutique. Recommencez.');}
-  reply.header('Set-Cookie','passerelle_oauth=; HttpOnly; SameSite=Lax; Path=/oauth/etsy/callback; Max-Age=0');return reply.redirect('/');
+  reply.header('Set-Cookie','passerelle_oauth=; Secure; HttpOnly; SameSite=Lax; Path=/oauth/etsy; Max-Age=0');return reply.redirect('/');
  });
  app.get('/api/shops/:id/profiles',async req=>{
   const s=await store.shop((req.params as {id:string}).id);if(!s.etsy_id)throw badRequest('Connectez la boutique.');const c=store.credentials(s.id);

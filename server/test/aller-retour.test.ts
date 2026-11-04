@@ -36,10 +36,10 @@ it('importe les vrais exports Studio par HTTP sans publication ni doublon',async
  }});
  const {app}=await createApp(store,etsy);
  try{
-  const headers={host:'127.0.0.1:3030'};
+  const headers={host:'localhost:3030'};
   const session=await app.inject({url:'/api/session',headers});
   expect(session.statusCode).toBe(200);
-  const write={...headers,origin:'http://127.0.0.1:3030','x-csrf-token':session.json().csrf};
+  const write={...headers,origin:'https://localhost:3030','x-csrf-token':session.json().csrf};
   const run=async(name:string,accepted:number)=>{
    const before=calls.length;
    const preview=await app.inject({method:'POST',url:'/api/import/preview',headers:{...write,'content-type':'application/zip'},payload:readFileSync(new URL(`./fixtures/${name}-exemple.zip`,import.meta.url))});

@@ -1,6 +1,7 @@
-﻿import { existsSync, readdirSync, statSync } from 'node:fs';
+﻿import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { get } from 'node:https';
 process.chdir(path.resolve(import.meta.dirname,'..'));
 if(Number(process.versions.node.split('.')[0])<24)throw new Error('Node.js 24 ou supérieur est nécessaire.');
 const sources=['shared/src','server/src','web/src','server/vite.config.ts','web/vite.config.ts','web/index.html','package-lock.json','package.json','tsconfig.base.json','server/tsconfig.json','web/tsconfig.json','shared/tsconfig.json'];
@@ -17,8 +18,9 @@ if(!existsSync('server/dist/index.js')||!existsSync('web/dist/index.html')||Math
 }
 const server=npm('start'),serverDone=wait(server).then(()=>null,error=>error);let exited=false;server.on('exit',()=>{exited=true;});
 for(let attempt=0;attempt<60&&!exited;attempt++){
- try{const r=await fetch('http://127.0.0.1:3030/api/session',{signal:AbortSignal.timeout(1000)});if(r.ok){
-  const open=spawn('cmd.exe',['/d','/c','start','','http://127.0.0.1:3030'],{stdio:'ignore',windowsHide:true});open.on('error',()=>console.log('Ouvrez http://127.0.0.1:3030 dans votre navigateur.'));open.unref();break;
+ try{const ca=readFileSync(path.join(process.env.PASSERELLE_DATA ?? path.join(process.env.LOCALAPPDATA ?? '.', 'Passerelle'),'tls','cert.pem'));
+  const ready=await new Promise((resolve,reject)=>{const request=get('https://127.0.0.1:3030/api/session',{ca,timeout:1000},response=>{response.resume();resolve(response.statusCode===200);});request.on('timeout',()=>request.destroy(new Error('Timeout')));request.on('error',reject);});if(ready){
+  const open=spawn('cmd.exe',['/d','/c','start','','https://localhost:3030'],{stdio:'ignore',windowsHide:true});open.on('error',()=>console.log('Ouvrez https://localhost:3030 dans votre navigateur.'));open.unref();break;
  }}catch{}
  await new Promise(resolve=>setTimeout(resolve,500));
 }

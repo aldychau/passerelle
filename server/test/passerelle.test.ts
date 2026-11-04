@@ -109,7 +109,7 @@ describe('Archives hostiles',()=>{
 describe('Serveur local et réseau',()=>{
  it('Host, Origin, CSRF, sécurité et réponses sans secrets',async()=>{
   const s=await Store.open('memory://');await s.add('Autre','LOCAL_KEY','LOCAL_SECRET');const {app}=await createApp(s,etsy);
-  const host={host:'127.0.0.1:3030'},origin='http://127.0.0.1:3030';
+  const host={host:'localhost:3030'},origin='https://localhost:3030';
   expect((await app.inject({url:'/api/session',headers:{host:'evil.test:3030'}})).statusCode).toBe(403);
   const session=await app.inject({url:'/api/session',headers:host});expect(session.statusCode).toBe(200);expect(session.headers['content-security-policy']).toContain("default-src 'self'");expect(session.headers['x-content-type-options']).toBe('nosniff');
   for(const headers of [{...host},{...host,origin},{...host,origin:'https://evil.test','x-csrf-token':session.json().csrf},{...host,origin,'x-csrf-token':'bad'}])expect((await app.inject({method:'POST',url:'/api/shops',headers,payload:{name:'X',keystring:'K',secret:'S'}})).statusCode).toBe(403);
@@ -123,7 +123,7 @@ describe('Serveur local et réseau',()=>{
  it('le code applicatif ne contient aucun accès réseau externe à Etsy',()=>{
   const walk=(dir:string):string[]=>readdirSync(dir,{withFileTypes:true}).flatMap(d=>d.isDirectory()?walk(path.join(dir,d.name)):[path.join(dir,d.name)]);
   for(const file of [...walk(path.resolve(import.meta.dirname,'../src')),...walk(path.resolve(import.meta.dirname,'../../web/src'))]){
-   const text=readFileSync(file,'utf8');for(const match of text.matchAll(/https?:\/\/[^\s'"`<>]+/g)){if(match[0] === 'http://${req.headers.host}')continue;const url=new URL(match[0]);expect(['api.etsy.com','www.etsy.com','127.0.0.1','localhost']).toContain(url.hostname);}
+   const text=readFileSync(file,'utf8');for(const match of text.matchAll(/https?:\/\/[^\s'"`<>]+/g)){if(match[0] === 'https://${req.headers.host}')continue;const url=new URL(match[0]);expect(['api.etsy.com','www.etsy.com','127.0.0.1','localhost']).toContain(url.hostname);}
    expect(text).not.toMatch(/WebSocket|EventSource|sendBeacon|XMLHttpRequest|node:https|node:http['"]|from ['"](?:axios|undici)/);
    if(text.includes('fetch(')||text.includes('this.#fetch('))expect(file.endsWith('client.ts')||file.endsWith('main.tsx')).toBe(true);
   }
@@ -136,17 +136,18 @@ describe('OAuth PKCE et écoute réelle',()=>{
   const oauthClient=new EtsyClient({sleep:async()=>{},fetch:async(input)=>{
    const url=String(input);return new Response(JSON.stringify(url.endsWith('/token')?{access_token:'OAUTH_ACCESS',refresh_token:'OAUTH_REFRESH',expires_in:3600}:url.endsWith('/users/me')?{shop_id:9}:{currency_code:'EUR',created_timestamp:1}),{status:200});
   }});
-  const {app}=await createApp(s,oauthClient),headers={host:'127.0.0.1:3030'},session=await app.inject({url:'/api/session',headers});
-  const write={...headers,origin:'http://127.0.0.1:3030','x-csrf-token':session.json().csrf};
-  const connect=await app.inject({method:'POST',url:`/api/shops/${id}/connect`,headers:write,payload:{}}),start=new URL(connect.json().url,'http://127.0.0.1:3030');
+  const {app}=await createApp(s,oauthClient),headers={host:'localhost:3030'},session=await app.inject({url:'/api/session',headers});
+  const write={...headers,origin:'https://localhost:3030','x-csrf-token':session.json().csrf};
+  const connect=await app.inject({method:'POST',url:`/api/shops/${id}/connect`,headers:write,payload:{}}),start=new URL(connect.json().url,'https://localhost:3030');
   expect(connect.body).not.toContain('OAUTH_KEY');
   const redirect=await app.inject({url:start.pathname+start.search,headers:{...headers,cookie:String(connect.headers['set-cookie']).split(';')[0]!}}),url=new URL(String(redirect.headers.location));
-  expect(url.origin).toBe('https://www.etsy.com');expect(url.searchParams.get('code_challenge_method')).toBe('S256');expect(url.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:3030/oauth/etsy/callback');expect(url.searchParams.get('code_challenge')).toHaveLength(43);expect(connect.body).not.toContain('OAUTH_SECRET');
+  expect(url.origin).toBe('https://www.etsy.com');expect(url.searchParams.get('code_challenge_method')).toBe('S256');expect(url.searchParams.get('redirect_uri')).toBe('https://localhost:3030/oauth/etsy/callback');expect(url.searchParams.get('code_challenge')).toHaveLength(43);expect(connect.body).not.toContain('OAUTH_SECRET');
+  expect(connect.headers['set-cookie']).toContain('; Secure;');
   const callback='/oauth/etsy/callback?code=mock&state='+url.searchParams.get('state');
   expect((await app.inject({url:callback,headers})).statusCode).toBe(400);
-  const second=await app.inject({method:'POST',url:`/api/shops/${id}/connect`,headers:write,payload:{}}),state=new URL(second.json().url,'http://127.0.0.1:3030').searchParams.get('state');
+  const second=await app.inject({method:'POST',url:`/api/shops/${id}/connect`,headers:write,payload:{}}),state=new URL(second.json().url,'https://localhost:3030').searchParams.get('state');
   const cookie=String(second.headers['set-cookie']).split(';')[0]!;
-  const success=await app.inject({url:'/oauth/etsy/callback?code=mock&state='+state,headers:{...headers,cookie}});expect(success.statusCode).toBe(302);expect(success.headers.location).toBe('/');
+  const success=await app.inject({url:'/oauth/etsy/callback?code=mock&state='+state,headers:{...headers,cookie}});expect(success.statusCode).toBe(302);expect(success.headers.location).toBe('/');expect(success.headers['set-cookie']).toContain('; Secure;');expect(success.headers['set-cookie']).toContain('Path=/oauth/etsy;');
   expect((await app.inject({url:'/oauth/etsy/callback?code=mock&state='+state,headers:{...headers,cookie}})).statusCode).toBe(400);
   expect((await s.credentials(id).load()).tokens?.access_token).toBe('OAUTH_ACCESS');const publicData=await app.inject({url:'/api/shops',headers});expect(publicData.body).not.toContain('OAUTH_ACCESS');expect(publicData.json()[0].connected).toBe(true);
   await app.close();

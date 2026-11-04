@@ -6,7 +6,7 @@ import { SecretBox } from './core/secret.js';
 import type { EtsyCredentials, EtsyCredentialStore } from './modules/connectors/etsy/client.js';
 export interface Shop {id:string;name:string;credentials:string;etsy_id:number|null;currency:string;created:number|null}
 export class Store {
- constructor(readonly db:PGlite,readonly secrets:SecretBox) {}
+ constructor(readonly db:PGlite,readonly secrets:SecretBox,readonly location='memory://') {}
  static async open(location=process.env.PASSERELLE_DATA ?? path.join(process.env.LOCALAPPDATA ?? '.', 'Passerelle')) {
   let key:Buffer;
   if(location==='memory://') key=crypto.randomBytes(32);
@@ -14,7 +14,7 @@ export class Store {
    if(!fs.existsSync(file))fs.writeFileSync(file,crypto.randomBytes(32),{flag:'wx',mode:0o600});
    key=fs.readFileSync(file);
   }
-  const s=new Store(new PGlite(location==='memory://'?'memory://':path.join(location,'db')),new SecretBox(key));
+  const s=new Store(new PGlite(location==='memory://'?'memory://':path.join(location,'db')),new SecretBox(key),location);
   await s.db.exec(`CREATE TABLE IF NOT EXISTS shops(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE,credentials TEXT NOT NULL,etsy_id BIGINT UNIQUE,currency TEXT NOT NULL DEFAULT '',created BIGINT);
   CREATE TABLE IF NOT EXISTS records(shop TEXT REFERENCES shops(id) ON DELETE CASCADE,kind TEXT,id TEXT,data JSONB NOT NULL,PRIMARY KEY(shop,kind,id));
   CREATE TABLE IF NOT EXISTS imported_fiches(ref TEXT PRIMARY KEY,shop TEXT REFERENCES shops(id) ON DELETE CASCADE,listing_id BIGINT,status TEXT NOT NULL DEFAULT 'ready',created_at BIGINT NOT NULL);

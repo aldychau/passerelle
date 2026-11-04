@@ -2,10 +2,11 @@
 import { normalizeReceipt } from '../src/modules/compta/normalize.js';
 import { catalogueFileSchema } from '@passerelle/shared';
 import { it,expect,vi } from 'vitest';
-import { readFileSync,mkdirSync,writeFileSync } from 'node:fs';
+import { readFileSync,mkdirSync,writeFileSync,mkdtempSync,rmSync } from 'node:fs';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { request } from 'node:http';
+import { request } from 'node:https';
 import { Store } from '../src/store.js';
 import { EtsyClient } from '../src/modules/connectors/etsy/client.js';
 import { createApp } from '../src/app.js';
@@ -75,19 +76,42 @@ it('installe les dépendances manquantes avant de préparer et démarrer, sans e
  const source=readFileSync(new URL('../../scripts/launch.mjs',import.meta.url),'utf8').replace(/^\uFEFF?import .*;\r?\n/gm,'').replaceAll('import.meta.dirname','launcherDir');
  const commands:string[]=[],messages:string[]=[],spawn=(_command:string,args:string[])=>{commands.push(args.at(-1)!);const child=new EventEmitter() as EventEmitter&{unref:()=>void};child.unref=()=>{};queueMicrotask(()=>child.emit('exit',0));return child;};
  const run=new Function('existsSync','readdirSync','statSync','spawn','path','process','launcherDir','console','fetch','AbortSignal',`return (async()=>{${source}})();`);
- await run(()=>false,()=>[],()=>({isDirectory:()=>false,mtimeMs:0}),spawn,path,{chdir:()=>{},versions:{node:'24.0.0'},platform:'win32'},'.',{log:(s:string)=>messages.push(s)},async()=>({ok:true}),AbortSignal);
+ await run(()=>false,()=>[],()=>({isDirectory:()=>false,mtimeMs:0}),spawn,path,{chdir:()=>{},versions:{node:'24.0.0'},platform:'win32',env:{}},'.',{log:(s:string)=>messages.push(s)},async()=>({ok:true}),AbortSignal);
  expect(commands.slice(0,3)).toEqual(['npm ci','npm run build','npm start']);expect(messages.join(' ')).toContain('npm ci');expect(messages.join(' ')).toContain('Internet');
 });
-it('parcourt HTTP avec Etsy simulé et réécrit boutique-exemple.zip à chaque exécution',async()=>{
+it('le lanceur attend le certificat local en HTTPS puis ouvre localhost',async()=>{
+ const source=readFileSync(new URL('../../scripts/launch.mjs',import.meta.url),'utf8').replace(/^\uFEFF?import .*;\r?\n/gm,'').replaceAll('import.meta.dirname','launcherDir');
+ const commands:string[]=[],certificate=Buffer.from('FAKE_LOCAL_CA'),server=new EventEmitter();
+ const spawn=(_command:string,args:string[])=>{
+  commands.push(args.at(-1)!);
+  if(args.at(-1)==='npm start')return server;
+  queueMicrotask(()=>server.emit('exit',0));
+  return Object.assign(new EventEmitter(),{unref:()=>{}});
+ };
+ const readCertificate=vi.fn(()=>certificate),get=vi.fn((_url:string,options:any,callback:any)=>{
+  expect(options).toEqual({ca:certificate,timeout:1000});
+  queueMicrotask(()=>callback({statusCode:200,resume:()=>{}}));
+  return new EventEmitter();
+ });
+ const run=new Function('existsSync','readdirSync','statSync','spawn','path','process','launcherDir','console','readFileSync','get',`return (async()=>{${source}})();`);
+ await run(()=>true,()=>[],()=>({isDirectory:()=>false,mtimeMs:1}),spawn,path,{chdir:()=>{},versions:{node:'24.0.0'},platform:'win32',env:{PASSERELLE_DATA:'fake-data'}},'.',{log:()=>{}},readCertificate,get);
+ expect(readCertificate).toHaveBeenCalledWith(path.join('fake-data','tls','cert.pem'));
+ expect(get.mock.calls[0]?.[0]).toBe('https://127.0.0.1:3030/api/session');
+ expect(commands).toEqual(['npm start','https://localhost:3030']);
+});
+it('parcourt HTTPS avec Etsy simulé et réécrit boutique-exemple.zip à chaque exécution',async()=>{
+ let ca:Buffer;
  const fetch=(url:string,init:{headers:Record<string,string>;method?:string;body?:string})=>new Promise<Response>((resolve,reject)=>{
-  const req=request(url,{method:init.method,headers:init.headers},res=>{const chunks:Buffer[]=[];res.on('data',b=>chunks.push(b));res.on('error',reject);res.on('end',()=>resolve(new Response(Buffer.concat(chunks),{status:res.statusCode,headers:{'content-type':String(res.headers['content-type'])}})));});
+  const req=request(url,{ca,method:init.method,headers:init.headers},res=>{const chunks:Buffer[]=[];res.on('data',b=>chunks.push(b));res.on('error',reject);res.on('end',()=>resolve(new Response(Buffer.concat(chunks),{status:res.statusCode,headers:{'content-type':String(res.headers['content-type'])}})));});
   req.on('error',reject);req.end(init.body);
  });
- const {store,id,etsy}=await setup(),{app}=await createApp(store,etsy),host={host:'127.0.0.1:3030'};
+ const directory=mkdtempSync(path.join(tmpdir(),'passerelle-https-'));
+ const {store,id,etsy}=await setup(),{app}=await createApp(new Store(store.db,store.secrets,directory),etsy),host={host:'localhost:3030'};
  try{
   await app.listen({host:'127.0.0.1',port:0});const address=app.server.address();if(!address||typeof address==='string')throw new Error('Missing local socket');
-  const base='http://127.0.0.1:'+address.port;
-  const session=await fetch(base+'/api/session',{headers:host});const headers={...host,origin:'http://127.0.0.1:3030','x-csrf-token':(await session.json()).csrf,'content-type':'application/json'};
+  ca=readFileSync(path.join(directory,'tls/cert.pem'));
+  const base='https://127.0.0.1:'+address.port;
+  const session=await fetch(base+'/api/session',{headers:host});const headers={...host,origin:'https://localhost:3030','x-csrf-token':(await session.json()).csrf,'content-type':'application/json'};
   const start=await fetch(base+'/api/extract',{method:'POST',headers,body:JSON.stringify({shops:[id],periode:'30j'})});expect(start.status).toBe(200);
   let state:any;for(let n=0;n<200;n++){const response=await fetch(base+'/api/extract/state',{headers:host});expect(response.status).toBe(200);state=await response.json();if(!state.running)break;await new Promise(resolve=>setTimeout(resolve,5));}
   expect(state).toMatchObject({running:false,ready:true,error:null});
@@ -102,7 +126,7 @@ it('parcourt HTTP avec Etsy simulé et réécrit boutique-exemple.zip à chaque 
   expect(JSON.parse(extended.get('echange.json')!)).toEqual(data);expect(JSON.parse(extended.get('releve.json')!)).toEqual(releve);
   expect(catalogueFileSchema.safeParse(JSON.parse(extended.get('catalogue.json')!)).success).toBe(true);
   const target=new URL('./fixtures/boutique-exemple.zip',import.meta.url);mkdirSync(new URL('./fixtures/',import.meta.url),{recursive:true});writeFileSync(target,payload);
- }finally{await app.close();}
+ }finally{await app.close();rmSync(directory,{recursive:true,force:true});}
 });
 
 async function everyZipEntry(buffer:Buffer):Promise<Map<string,string>>{return new Promise((resolve,reject)=>{yauzl.fromBuffer(buffer,{lazyEntries:true},(err,zip)=>{if(err)return reject(err);const out=new Map<string,string>();zip.on('error',reject);zip.on('end',()=>resolve(out));zip.on('entry',entry=>zip.openReadStream(entry,(err,stream)=>{if(err)return reject(err);const chunks:Buffer[]=[];stream.on('error',reject);stream.on('data',b=>chunks.push(b));stream.on('end',()=>{out.set(entry.fileName,Buffer.concat(chunks).toString('utf8'));zip.readEntry();});}));zip.readEntry();});});}

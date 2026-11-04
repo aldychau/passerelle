@@ -9,7 +9,7 @@ export default defineConfig({
   server: {
     port: 5173,
     // En développement l'API tourne à part (npm run dev) ; même origine vue du navigateur.
-    proxy: { '/api': 'http://127.0.0.1:3030', '/oauth': 'http://127.0.0.1:3030' },
+    proxy: { '/api': { target: 'https://127.0.0.1:3030', secure: false }, '/oauth': { target: 'https://127.0.0.1:3030', secure: false } },
   },
   build: { outDir: 'dist', sourcemap: false },
 });
