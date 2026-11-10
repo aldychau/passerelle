@@ -11,16 +11,21 @@ import { Store } from './store.js';
 import { EtsyClient } from './modules/connectors/etsy/client.js';
 import { Extraction } from './extraction.js';
 import { Imports } from './imports.js';
+import { StudioLink } from './studio.js';
 import { badRequest } from './core/errors.js';
 import { readExchangeArchive,writeExchangeArchive } from './core/echange.js';
 export const HOST='127.0.0.1',PORT=3030;
 export const CALLBACK='https://localhost:3030/oauth/etsy/callback';
 const allowedHosts=new Set(['127.0.0.1:3030','localhost:3030']);
 const scopes=['shops_r','transactions_r','listings_r','listings_w','transactions_w','billing_r','profile_r'];
-export async function createApp(store:Store,etsy=new EtsyClient()){
+export async function createApp(store:Store,etsy=new EtsyClient(),studioFetch:typeof fetch=fetch){
  const app=Fastify({https:localTls(store.location),logger:false,bodyLimit:200*1024*1024,requestTimeout:300000});
  const csrf=crypto.randomBytes(32).toString('base64url');
- const extraction=new Extraction(store,etsy),imports=new Imports(store,etsy);
+ const extraction=new Extraction(store,etsy),imports=new Imports(store,etsy),studio=new StudioLink(store,studioFetch);
+ // La version lue par le Studio : echange.json et releve.json seulement (le catalogue complet reste à part).
+ const studioZip=async(zip:Buffer)=>{const archive=await readExchangeArchive(zip,{media:false,releve:true});return writeExchangeArchive(archive.json,new Map([['releve.json',Buffer.from(JSON.stringify(archive.releve))]]));};
+ // Après une extraction réussie, si une clé Studio est réglée, le fichier part tout seul au Studio.
+ const sendToStudio=async()=>{if(!extraction.zip||!extraction.state.ready||!(await studio.config()))return;extraction.state.log.push('Envoi au Studio…');try{extraction.state.log.push((await studio.send(await studioZip(extraction.zip)))!);}catch(e){extraction.state.log.push(e instanceof Error?e.message:'Envoi au Studio impossible.');}};
  const oauth=new Map<string,{id:string;verifier:string;expires:number;browser:string}>();
  let task:Promise<unknown>|null=null;
  await app.register(helmet,{contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],styleSrc:["'self'"],connectSrc:["'self'"],imgSrc:["'self'"],fontSrc:["'self'"],objectSrc:["'none'"],baseUri:["'none'"],frameAncestors:["'none'"],formAction:["'self'"],upgradeInsecureRequests:null}},hsts:false});
@@ -84,10 +89,14 @@ export async function createApp(store:Store,etsy=new EtsyClient()){
   const b=z.object({shops:z.array(z.string()).min(1),periode:z.enum(ECHANGE_PERIODES).default('30j')}).strict().parse(req.body);
   if(b.shops.some(id=>!id)||new Set(b.shops).size!==b.shops.length)throw badRequest('Sélection invalide');
   for(const id of b.shops)await store.shop(id);
-  task=extraction.run(b.shops,b.periode).finally(()=>{task=null;});return {ok:true};
+  task=extraction.run(b.shops,b.periode).then(sendToStudio).finally(()=>{task=null;});return {ok:true};
  });
- app.get('/api/extract/state',async()=>extraction.state);
- app.get('/api/extract/download',async(req,reply)=>{if(!extraction.zip||extraction.state.running)throw badRequest('Aucun fichier prêt.');let zip=extraction.zip;const q=z.object({studio:z.enum(['1']).optional(),catalogue:z.enum(['1']).optional()}).strict().parse(req.query);if(!q.catalogue||q.studio){const archive=await readExchangeArchive(zip,{media:false,releve:true});zip=await writeExchangeArchive(archive.json,new Map([['releve.json',Buffer.from(JSON.stringify(archive.releve))]]));}return reply.type('application/zip').header('Content-Disposition','attachment; filename="boutique.zip"').send(zip);});
+ app.get('/api/extract/state',async()=>({...extraction.state,running:extraction.state.running||task!==null}));
+ app.get('/api/extract/download',async(req,reply)=>{if(!extraction.zip||extraction.state.running)throw badRequest('Aucun fichier prêt.');let zip=extraction.zip;const q=z.object({studio:z.enum(['1']).optional(),catalogue:z.enum(['1']).optional()}).strict().parse(req.query);if(!q.catalogue||q.studio)zip=await studioZip(zip);return reply.type('application/zip').header('Content-Disposition','attachment; filename="boutique.zip"').send(zip);});
+ app.get('/api/studio',async()=>studio.state());
+ app.post('/api/studio',async req=>{if(task)throw badRequest('Opération en cours.');await studio.save(req.body);return studio.state();});
+ app.delete('/api/studio',async()=>{if(task)throw badRequest('Opération en cours.');await studio.clear();return studio.state();});
+ app.post('/api/studio/send',async()=>{if(task)throw badRequest('Opération en cours.');if(!extraction.zip||!extraction.state.ready)throw badRequest('Lance d’abord une extraction.');const run=studio.send(await studioZip(extraction.zip));task=run;try{const message=await run;if(!message)throw badRequest('Règle d’abord l’envoi au Studio.');return {message};}finally{task=null;}});
  app.post('/api/import/preview',async req=>{if(task)throw badRequest('Opération en cours.');if(!Buffer.isBuffer(req.body))throw badRequest('Choisissez un zip.');const run=imports.preview(req.body);task=run;try{return await run;}finally{task=null;}});
  app.post('/api/import/confirm',async req=>{if(task)throw badRequest('Opération en cours.');const b=z.object({token:z.string().uuid()}).strict().parse(req.body);const run=imports.enqueue(b.token);task=run;try{return await run;}finally{task=null;}});
  app.post('/api/import/sync',async()=>{if(task)throw badRequest('Op?ration en cours.');task=imports.synchronize().finally(()=>{task=null;});return {ok:true};});

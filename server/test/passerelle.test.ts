@@ -123,9 +123,11 @@ describe('Serveur local et réseau',()=>{
  it('le code applicatif ne contient aucun accès réseau externe à Etsy',()=>{
   const walk=(dir:string):string[]=>readdirSync(dir,{withFileTypes:true}).flatMap(d=>d.isDirectory()?walk(path.join(dir,d.name)):[path.join(dir,d.name)]);
   for(const file of [...walk(path.resolve(import.meta.dirname,'../src')),...walk(path.resolve(import.meta.dirname,'../../web/src'))]){
-   const text=readFileSync(file,'utf8');for(const match of text.matchAll(/https?:\/\/[^\s'"`<>]+/g)){if(match[0] === 'https://${req.headers.host}')continue;const url=new URL(match[0]);expect(['api.etsy.com','www.etsy.com','127.0.0.1','localhost']).toContain(url.hostname);}
+   const text=readFileSync(file,'utf8');for(const match of text.matchAll(/https?:\/\/[^\s'"`<>]+/g)){if(match[0] === 'https://${req.headers.host}')continue;const url=new URL(match[0]);expect(['api.etsy.com','www.etsy.com','127.0.0.1','localhost','www.studio-atelier-ets.com']).toContain(url.hostname);if(url.hostname==='www.studio-atelier-ets.com')expect(file.endsWith('main.tsx')).toBe(true);}
    expect(text).not.toMatch(/WebSocket|EventSource|sendBeacon|XMLHttpRequest|node:https|node:http['"]|from ['"](?:axios|undici)/);
    if(text.includes('fetch(')||text.includes('this.#fetch('))expect(file.endsWith('client.ts')||file.endsWith('main.tsx')).toBe(true);
+   // le seul autre appel sortant : l'envoi au Studio réglé par l'utilisateur (studio.ts) ; l'adresse du Studio n'est qu'une valeur proposée dans le formulaire
+   if(text.includes('fetchImpl('))expect(file.endsWith('studio.ts')).toBe(true);
   }
  });
 });
