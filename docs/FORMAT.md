@@ -29,7 +29,7 @@ Archives limitées à 200 Mo compressés et décompressés au total, JSON 20 Mo,
 
 ## Catalogue complémentaire optionnel
 
-Les contrats stricts Studio de `echange.json` et `releve.json` restent inchangés. Le téléchargement principal `/api/extract/download` contient uniquement ces deux fichiers. Le paramètre historique `studio=1` conserve ce comportement et reste prioritaire. Le lien optionnel `/api/extract/download?catalogue=1` ajoute `catalogue.json` version 1, validé par `shared/src/catalogue.ts`, avec toutes les données et contacts. Le Studio actuel refuse cette extension.
+Les contrats stricts Studio de `echange.json` et `releve.json` restent inchangés. Le téléchargement principal `/api/extract/download` (et `studio=1`, prioritaire), comme l'envoi direct au Studio, contient ces deux fichiers et `catalogue.json` **sans le champ contacts**, s'il passe la vérification stricte du Studio (`catalogueForStudio`, copie du schéma du Studio : devises ISO, notes 1 à 5, une annonce par numéro) ; sinon il est laissé de côté et le journal le dit. Le lien `/api/extract/download?catalogue=1` donne le catalogue complet, contacts compris, à garder privé.
 
 Enveloppe : `format: "passerelle-catalogue"`, `version: 1`, `createdAt` en millisecondes, `boutiques`.
 Chaque boutique contient `shop` (liaison Studio), `name` (nom Etsy), `currency`, `sections: [{id,title}]`, `shippingProfiles`, `annonces`, `reviews` et `contacts` optionnel.
@@ -49,4 +49,4 @@ Une commande doit être payée, non expédiée, non annulée et sans rembourseme
 
 Importer valide et montre l’aperçu sans écriture Etsy. Enregistrer en attente consomme le jeton de l’aperçu et conserve chaque élément et ses médias chiffrés dans `import_jobs`. Synchroniser avec Etsy traite cette file dans l’ordre avec progression et résultat par ligne. Après coupure, seuls les éléments non terminés sont repris. Une réussite efface le contenu de sa tâche. Les envois incertains restent bloqués par les protections existantes. Le bouton affiche le nombre restant.
 
-L’extension doit encore être convenue et implémentée dans le Studio : accepter explicitement `catalogue.json` (20 Mo), valider son schéma version 1, puis importer annonces et contacts par boutique et identifiant. Ce contrat reste une proposition.
+Le Studio lit `catalogue.json` (20 Mo) : il l'enregistre par boutique, en tire toutes les variantes en vente de chaque annonce (fiche fournisseur de Produits) et pose l'option AliExpress aux mêmes valeurs sur une annonce déjà liée. Les contacts n'y entrent jamais.

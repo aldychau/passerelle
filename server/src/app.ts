@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { ECHANGE_PERIODES } from '@passerelle/shared';
+import { ECHANGE_PERIODES, catalogueForStudio } from '@passerelle/shared';
 import { Store } from './store.js';
 import { EtsyClient } from './modules/connectors/etsy/client.js';
 import { Extraction } from './extraction.js';
@@ -24,10 +24,11 @@ export async function createApp(store:Store,etsy=new EtsyClient(),studioFetch:ty
  const app=Fastify({https:localTls(store.location),logger:false,bodyLimit:200*1024*1024,requestTimeout:300000});
  const csrf=crypto.randomBytes(32).toString('base64url');
  const extraction=new Extraction(store,etsy),imports=new Imports(store,etsy),studio=new StudioLink(store,studioFetch);
- // La version lue par le Studio : echange.json et releve.json seulement (le catalogue complet reste à part).
- const studioZip=async(zip:Buffer)=>{const archive=await readExchangeArchive(zip,{media:false,releve:true});return writeExchangeArchive(archive.json,new Map([['releve.json',Buffer.from(JSON.stringify(archive.releve))]]));};
+ // La version lue par le Studio : echange.json, releve.json et le catalogue (toutes les variantes en vente, pour lier
+ // chacune à AliExpress), sans les coordonnées des acheteurs. Un catalogue que le Studio refuserait reste de côté.
+ const studioZip=async(zip:Buffer,log?:(line:string)=>void)=>{const archive=await readExchangeArchive(zip,{media:false,releve:true});const files=new Map([['releve.json',Buffer.from(JSON.stringify(archive.releve))]]);const catalogue=catalogueForStudio(archive.catalogue);if('file' in catalogue)files.set('catalogue.json',Buffer.from(JSON.stringify(catalogue.file)));else log?.(catalogue.reason);return writeExchangeArchive(archive.json,files);};
  // Après une extraction réussie, si une clé Studio est réglée, le fichier part tout seul au Studio.
- const sendToStudio=async()=>{if(!extraction.zip||!extraction.state.ready||!(await studio.config()))return;extraction.state.log.push('Envoi au Studio…');try{extraction.state.log.push((await studio.send(await studioZip(extraction.zip)))!);}catch(e){extraction.state.log.push(e instanceof Error?e.message:'Envoi au Studio impossible.');}};
+ const sendToStudio=async()=>{if(!extraction.zip||!extraction.state.ready||!(await studio.config()))return;extraction.state.log.push('Envoi au Studio…');try{extraction.state.log.push((await studio.send(await studioZip(extraction.zip,line=>extraction.state.log.push(line))))!);}catch(e){extraction.state.log.push(e instanceof Error?e.message:'Envoi au Studio impossible.');}};
  const oauth=new Map<string,{id:string;verifier:string;expires:number;browser:string}>();
  let task:Promise<unknown>|null=null;
  await app.register(helmet,{contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],styleSrc:["'self'"],connectSrc:["'self'"],imgSrc:["'self'"],fontSrc:["'self'"],objectSrc:["'none'"],baseUri:["'none'"],frameAncestors:["'none'"],formAction:["'self'"],upgradeInsecureRequests:null}},hsts:false});

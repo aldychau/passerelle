@@ -119,8 +119,10 @@ it('parcourt HTTPS avec Etsy simulé et réécrit boutique-exemple.zip à chaque
   const zip=await readExchangeArchive(payload,{media:false,releve:true}),data=zip.json as any,releve=zip.releve as any;
   expect(data.commandes).toHaveLength(2);expect(data.annonces).toHaveLength(1);expect(releve.boutiques[0].commandes).toHaveLength(3);expect(releve.boutiques[0].operations).toHaveLength(1);expect(releve.boutiques[0].vues).toHaveLength(1);
   const compatibleResponse=await fetch(base+'/api/extract/download?studio=1',{headers:host});expect(compatibleResponse.status).toBe(200);
-  const compatible=await everyZipEntry(Buffer.from(await compatibleResponse.arrayBuffer()));expect([...compatible.keys()].sort()).toEqual(['echange.json','releve.json']);expect(JSON.parse(compatible.get('echange.json')!)).toEqual(data);
-  expect([...(await everyZipEntry(payload)).keys()].sort()).toEqual(['echange.json','releve.json']);
+  const compatible=await everyZipEntry(Buffer.from(await compatibleResponse.arrayBuffer()));expect([...compatible.keys()].sort()).toEqual(['catalogue.json','echange.json','releve.json']);
+  // le catalogue part au Studio (toutes les variantes en vente), jamais avec les coordonnées des acheteurs
+  const sent=JSON.parse(compatible.get('catalogue.json')!);expect(sent.boutiques[0]).not.toHaveProperty('contacts');expect(compatible.get('catalogue.json')).not.toContain('@');expect(sent.boutiques[0].annonces[0].products.length).toBeGreaterThan(0);expect(JSON.parse(compatible.get('echange.json')!)).toEqual(data);
+  expect([...(await everyZipEntry(payload)).keys()].sort()).toEqual(['catalogue.json','echange.json','releve.json']);
   const extendedResponse=await fetch(base+'/api/extract/download?catalogue=1',{headers:host});expect(extendedResponse.status).toBe(200);
   const extended=await everyZipEntry(Buffer.from(await extendedResponse.arrayBuffer()));expect([...extended.keys()].sort()).toEqual(['catalogue.json','echange.json','releve.json']);
   expect(JSON.parse(extended.get('echange.json')!)).toEqual(data);expect(JSON.parse(extended.get('releve.json')!)).toEqual(releve);

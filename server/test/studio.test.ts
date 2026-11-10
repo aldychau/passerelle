@@ -59,3 +59,23 @@ it('règle le Studio, garde le secret chiffré et envoie le fichier boutique ave
     expect(calls).toHaveLength(2);
   } finally { await app.close(); }
 });
+
+it('prépare le catalogue pour le Studio : sans coordonnées, et laissé de côté si le Studio le refuserait', async () => {
+  const { catalogueForStudio, jsonTokens, CATALOGUE_JSON_TOKENS } = await import('@passerelle/shared');
+  const listing = (listingId: number) => ({ listingId, title: 'Bonnet', description: 'Laine "douce", {chaude}', tags: [], materials: [], price: 12, currency: 'EUR', quantity: 3, sku: [], sectionId: null, state: 'active', images: [],
+    products: [{ sku: '', properties: [{ name: 'Couleur', values: ['Bleu'] }], offerings: [{ price: 12, currency: 'EUR', quantity: 3, enabled: true }] }] });
+  const file = (shop: Record<string, unknown> = {}, annonces = [listing(1)]) => ({ format: 'passerelle-catalogue', version: 1, createdAt: 1, boutiques: [{ shop: 'B', name: 'B', currency: 'EUR', sections: [], shippingProfiles: [], reviews: [], annonces,
+    contacts: [{ receiptId: 9, email: 'acheteur@exemple.test', phone: '0600000000', message: 'secret' }], ...shop }] });
+  const ok = catalogueForStudio(file());
+  expect('file' in ok).toBe(true);
+  const sent = JSON.stringify((ok as { file: unknown }).file);
+  for (const token of ['contacts', 'acheteur@exemple.test', '0600000000', 'secret']) expect(sent).not.toContain(token);
+  // devise vide : le Studio refuserait tout l'import, commandes comprises → envoyé sans catalogue
+  expect(catalogueForStudio(file({ currency: '' }))).toMatchObject({ reason: expect.stringContaining('refuserait') });
+  expect(catalogueForStudio(file({}, [listing(1), listing(1)]))).toMatchObject({ reason: expect.stringContaining('refuserait') });
+  expect(catalogueForStudio(undefined)).toMatchObject({ reason: expect.stringContaining('absent') });
+  // comptage identique au lecteur du Studio : la ponctuation dans les textes ne compte pas
+  expect(jsonTokens('{"a":"{,}","b":[1,2]}')).toBe(8);
+  const many = Array.from({ length: Math.ceil(CATALOGUE_JSON_TOKENS / 40) }, (_, i) => listing(i + 1));
+  expect(catalogueForStudio(file({}, many))).toMatchObject({ reason: expect.stringContaining('trop volumineux') });
+});
