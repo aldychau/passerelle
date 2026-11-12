@@ -15,8 +15,6 @@ import { StudioLink } from './studio.js';
 import { badRequest } from './core/errors.js';
 import { readExchangeArchive,writeExchangeArchive } from './core/echange.js';
 export const HOST='127.0.0.1',PORT=3030;
-/** Une boutique pour l'instant (ajout et extraction) ; plusieurs boutiques viendront avec l'abonnement Studio. */
-export const MAX_SHOPS=1;
 export const CALLBACK='https://localhost:3030/oauth/etsy/callback';
 const allowedHosts=new Set(['127.0.0.1:3030','localhost:3030']);
 const scopes=['shops_r','transactions_r','listings_r','listings_w','transactions_w','billing_r','profile_r'];
@@ -50,8 +48,6 @@ export async function createApp(store:Store,etsy=new EtsyClient(),studioFetch:ty
  app.post('/api/shops',async req=>{
   if(task)throw badRequest('Attendez la fin de l’opération.');
   const b=z.object({name:z.string().trim().min(1).max(80),keystring:z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),secret:z.string().regex(/^[A-Za-z0-9_-]{1,200}$/)}).strict().parse(req.body);
-  // Une seule boutique pour l'instant : plusieurs boutiques arriveront avec l'abonnement Studio.
-  if((await store.shops()).length>=MAX_SHOPS)throw badRequest('Une boutique par Passerelle pour l’instant. Plusieurs boutiques arriveront avec l’abonnement Studio.');
   return {id:await store.add(b.name,b.keystring,b.secret)};
  });
  app.delete('/api/shops/:id',async req=>{if(task)throw badRequest('Opération en cours.');const {id}=req.params as {id:string};await store.db.query('DELETE FROM shops WHERE id=$1',[id]);return {ok:true};});
@@ -92,7 +88,6 @@ export async function createApp(store:Store,etsy=new EtsyClient(),studioFetch:ty
  app.post('/api/extract',async req=>{
   if(task)throw badRequest('Une opération est en cours.');
   const b=z.object({shops:z.array(z.string()).min(1),periode:z.enum(ECHANGE_PERIODES).default('30j')}).strict().parse(req.body);
-  if(b.shops.length>MAX_SHOPS)throw badRequest('Une boutique par extraction pour l’instant.');
   if(b.shops.some(id=>!id)||new Set(b.shops).size!==b.shops.length)throw badRequest('Sélection invalide');
   for(const id of b.shops)await store.shop(id);
   task=extraction.run(b.shops,b.periode).then(sendToStudio).finally(()=>{task=null;});return {ok:true};

@@ -113,12 +113,7 @@ describe('Serveur local et réseau',()=>{
   expect((await app.inject({url:'/api/session',headers:{host:'evil.test:3030'}})).statusCode).toBe(403);
   const session=await app.inject({url:'/api/session',headers:host});expect(session.statusCode).toBe(200);expect(session.headers['content-security-policy']).toContain("default-src 'self'");expect(session.headers['x-content-type-options']).toBe('nosniff');
   for(const headers of [{...host},{...host,origin},{...host,origin:'https://evil.test','x-csrf-token':session.json().csrf},{...host,origin,'x-csrf-token':'bad'}])expect((await app.inject({method:'POST',url:'/api/shops',headers,payload:{name:'X',keystring:'K',secret:'S'}})).statusCode).toBe(403);
-  const valid={...host,origin,'x-csrf-token':session.json().csrf};
-  // une boutique pour l'instant : la deuxième est refusée, et une extraction ne porte que sur une boutique
-  const second=await app.inject({method:'POST',url:'/api/shops',headers:valid,payload:{name:'X',keystring:'K',secret:'S'}});expect(second.statusCode).toBe(400);expect(second.json().error).toContain('Une boutique');
-  expect((await app.inject({method:'POST',url:'/api/extract',headers:valid,payload:{shops:['a','b'],periode:'30j'}})).statusCode).toBe(400);
-  const only=(await s.shops())[0]!.id;await app.inject({method:'DELETE',url:`/api/shops/${only}`,headers:valid});
-  expect((await app.inject({method:'POST',url:'/api/shops',headers:valid,payload:{name:'X',keystring:'K',secret:'S'}})).statusCode).toBe(200);
+  const valid={...host,origin,'x-csrf-token':session.json().csrf};expect((await app.inject({method:'POST',url:'/api/shops',headers:valid,payload:{name:'X',keystring:'K',secret:'S'}})).statusCode).toBe(200);
   const shops=await app.inject({url:'/api/shops',headers:host});expect(shops.body).not.toContain('LOCAL_KEY');expect(shops.body).not.toContain('LOCAL_SECRET');
   expect((await app.inject({url:'/api/shops',headers:{...host,origin:'null'}})).statusCode).toBe(403);expect((await app.inject({url:'/api/session',headers:{host:'localhost:3030'}})).statusCode).toBe(200);
   expect((await app.inject({method:'POST',url:'/api/extract',headers:valid,payload:{shops:['x'],periode:'bad'}})).statusCode).toBe(400);
