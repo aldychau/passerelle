@@ -110,3 +110,4 @@ footer p { margin: 0 0 6px; max-width: 760px; }
   .grid { grid-template-columns: 1fr; }
   .actions button { flex: 1; }
 }
+.mt { margin-top: 12px; }
